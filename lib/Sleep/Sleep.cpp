@@ -26,6 +26,9 @@ void SleepSetup(uint8_t wdp) {
 void SleepStart() {
     set_sleep_mode(SLEEP_MODE_PWR_DOWN);
     sleep_enable();
+    cli();
+    sleep_bod_disable();
+    sei();
     wdt_reset();
 
     /* Now enter sleep mode. */
@@ -33,7 +36,4 @@ void SleepStart() {
 
     /* The program will continue from here after the WDT timeout*/
     sleep_disable(); /* First thing to do is disable sleep. */
-
-    /* Re-enable the peripherals. */
-    power_all_enable();
 }

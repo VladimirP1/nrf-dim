@@ -1,6 +1,8 @@
 #include <Arduino.h>
 #include <SPI.h>
 #include <RH_NRF24.h>
+#include <avr/power.h>
+#include <avr/io.h>
 
 #include <OTA.h>
 #include <Sleep.h>
@@ -14,11 +16,13 @@ static constexpr uint8_t kMyUuid = 0x389d;
 
 static constexpr uint8_t kBindButtonPin = 2;
 static constexpr uint8_t kLampPins[] = {A0/*, A1, A2*/};
+static constexpr uint8_t kNrfPowerPin = 4;
+static constexpr uint8_t kPotPowerPin = 5;
 static constexpr int kNoiseAmplitude = 6;
 static constexpr int kRetransmitCount = 10;
 static constexpr int kWdtPrescaler = 4;
 static constexpr int kMinInterpacketDelay = 5;
-static constexpr int kMaxInterpacketDelay = 25;
+static constexpr int kMaxInterpacketDelay = 15;
 
 static int prev_vals[3];
 static int counters[3];
@@ -26,29 +30,49 @@ static int out_mins[3];
 static int out_maxes[3];
 static OtaPacket pkt;
 
+bool nrfPowered = false;
+
 int AnalogNR(int pin) {
-    analogRead(pin);
-    delay(1);
-    return (analogRead(pin) + analogRead(pin)) / 2;
+    digitalWrite(kPotPowerPin, HIGH);
+    power_adc_enable();
+    ADCSRA |= (1 << ADEN);
+    int x = (analogRead(pin));
+    digitalWrite(kPotPowerPin, LOW);
+    ADCSRA &= ~(1 << ADEN);
+    power_adc_disable();
+    return x;
+}
+
+void SetRfEnabled(bool on) {
+    if (on && !nrfPowered) {
+        digitalWrite(kNrfPowerPin, HIGH);
+        RF.init();
+        RF.setChannel(1);
+        RF.setRF(RH_NRF24::DataRate250kbps, RH_NRF24::TransmitPower0dBm);
+        nrfPowered = true;
+    } else if (!on) {
+        digitalWrite(kNrfPowerPin, LOW);
+        nrfPowered = false;
+    }
 }
 
 void setup() {
-    Serial.begin(9600);
-    if (!RF.init())
-        Serial.println("init failed");
-    if (!RF.setChannel(1))
-        Serial.println("setChannel failed");
-    if (!RF.setRF(RH_NRF24::DataRate250kbps, RH_NRF24::TransmitPower0dBm))
-        Serial.println("setRF failed");
-
+    PORTC = 0xfe;
+    PORTD = 0xff;
+    PORTB = 0x01;
+    DIDR0 = 0xff;
+    DIDR1 = 0xff;
     for (uint8_t i = 0; i < sizeof(kLampPins); ++i) {
         pinMode(kLampPins[i], INPUT);
         counters[i] = 0;
     }
-    pinMode(4, OUTPUT);
+    pinMode(kNrfPowerPin, OUTPUT);
+    pinMode(kPotPowerPin, OUTPUT);
     pinMode(kBindButtonPin, INPUT_PULLUP);
     delay(30);
+
     if (digitalRead(kBindButtonPin) == LOW) {
+        SetRfEnabled(true);
         for (uint8_t i = 0; i < sizeof(kLampPins); ++i) {
             out_mins[i] = 0x7fff;
             out_maxes[i] = 0;
@@ -67,24 +91,21 @@ void setup() {
                 out_maxes[i] = max(val, out_maxes[i]);
             }
             delay(100);
-            Serial.println("[In range mode]");
         }
         for (uint8_t i = 0; i < sizeof(kLampPins); ++i) {
             EepWrite16(i, out_mins[i]);
             EepWrite16(i + sizeof(out_mins), out_maxes[i]);
-            Serial.print((float)out_mins[i]);
-            Serial.print(" ");
-            Serial.println((float)out_maxes[i]);
         }
     }
     for (uint8_t i = 0; i < sizeof(kLampPins); ++i) {
         out_mins[i] = EepRead16(i);
         out_maxes[i] = EepRead16(i + sizeof(out_mins));
-        Serial.print((float)out_mins[i]);
-        Serial.print(" ");
-        Serial.println((float)out_maxes[i]);
     }
     SleepSetup(kWdtPrescaler);
+    power_twi_disable();
+    power_timer1_disable();
+    power_timer2_disable();
+    power_usart0_disable();
 }
 
 void loop() {
@@ -96,6 +117,7 @@ void loop() {
             prev_vals[i] = val;
         }
         if (counters[i]) {
+            SetRfEnabled(true);
             val = ((float)val / 1024.f) * (out_maxes[i] - out_mins[i]) + out_mins[i];
             pkt.src_uuid = kMyUuid;
             pkt.light_id = i;
@@ -108,19 +130,21 @@ void loop() {
         }
     }
     if (digitalRead(kBindButtonPin) == LOW) {
+        SetRfEnabled(true);
         pkt.src_uuid = kMyUuid;
         pkt.light_id = 0xffff;
         pkt.light_brightness = 0;
         RF.send(reinterpret_cast<uint8_t*>(&pkt), sizeof(pkt));
         RF.waitPacketSent();
-        Serial.println("Bind packet sent");
     }
 
     if (allZeros) {
-        digitalWrite(4,LOW);
         RF.sleep();
+        power_spi_disable();
+        SetRfEnabled(false);
         SleepStart();
-        digitalWrite(4,HIGH);
+        power_spi_enable();
+        power_timer0_enable();
     } else {
         delay(random(kMinInterpacketDelay, kMaxInterpacketDelay));
     }
