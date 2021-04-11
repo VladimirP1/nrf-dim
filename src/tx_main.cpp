@@ -12,10 +12,10 @@
 
 static RH_NRF24 RF(10, 9);
 
-static constexpr uint8_t kMyUuid = 0x389d;
+static constexpr uint16_t kMyUuid = 0xd959;
 
 static constexpr uint8_t kBindButtonPin = 2;
-static constexpr uint8_t kLampPins[] = {A0/*, A1, A2*/};
+static constexpr uint8_t kLampPins[] = {A0, A1/*, A2*/};
 static constexpr uint8_t kNrfPowerPin = 4;
 static constexpr uint8_t kPotPowerPin = 5;
 static constexpr int kNoiseAmplitude = 6;
@@ -35,11 +35,12 @@ bool nrfPowered = false;
 int AnalogNR(int pin) {
     digitalWrite(kPotPowerPin, HIGH);
     power_adc_enable();
-    ADCSRA |= (1 << ADEN);
-    int x = (analogRead(pin));
-    digitalWrite(kPotPowerPin, LOW);
-    ADCSRA &= ~(1 << ADEN);
+    ADCSRA = (1 << ADEN);
+    delayMicroseconds(10);
+    int x = analogRead(pin);
+    ADCSRA = 0;
     power_adc_disable();
+    digitalWrite(kPotPowerPin, LOW);
     return x;
 }
 
@@ -49,6 +50,7 @@ void SetRfEnabled(bool on) {
         RF.init();
         RF.setChannel(1);
         RF.setRF(RH_NRF24::DataRate250kbps, RH_NRF24::TransmitPower0dBm);
+        delay(15);
         nrfPowered = true;
     } else if (!on) {
         digitalWrite(kNrfPowerPin, LOW);
@@ -134,6 +136,8 @@ void loop() {
         pkt.src_uuid = kMyUuid;
         pkt.light_id = 0xffff;
         pkt.light_brightness = 0;
+        RF.send(reinterpret_cast<uint8_t*>(&pkt), sizeof(pkt));
+        RF.waitPacketSent();
         RF.send(reinterpret_cast<uint8_t*>(&pkt), sizeof(pkt));
         RF.waitPacketSent();
     }

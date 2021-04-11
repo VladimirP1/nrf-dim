@@ -10,9 +10,10 @@
 static RH_NRF24 RF(10, 9);
 
 static constexpr uint8_t kBindButtonPin = 2;
+static constexpr uint8_t kRelayPins[] = {4,7,8};
 static constexpr uint8_t kLampPins[] = {3,5,6};
 
-static constexpr bool kEnableDebug = false; 
+static constexpr bool kEnableDebug = true; 
 
 static OtaPacket pkt;
 static uint8_t len = sizeof(pkt);
@@ -53,6 +54,7 @@ void setup() {
     pinMode(kBindButtonPin, INPUT_PULLUP);
     for (uint8_t i = 0; i < sizeof(kLampPins); ++i) {
         pinMode(kLampPins[i], OUTPUT);
+        pinMode(kRelayPins[i], OUTPUT);
     }
     delay(30);
     if (digitalRead(kBindButtonPin) == LOW) {
@@ -66,9 +68,12 @@ void loop() {
         if (RF.recv(reinterpret_cast<uint8_t*>(&pkt), &len)) {
             if (MyMasterUuid == pkt.src_uuid) {
                 if (pkt.light_id < sizeof(kLampPins)) {
-                    analogWrite(kLampPins[pkt.light_id], pkt.light_brightness >> 8);
+                    digitalWrite(kRelayPins[pkt.light_id], (pkt.light_brightness >> 8) > 1);
+                    analogWrite(kLampPins[pkt.light_id], max(0,(pkt.light_brightness >> 8) - 2));
                     if (kEnableDebug) {
                         Serial.print(pkt.light_id);
+                        Serial.print(" ");
+                        Serial.print(pkt.src_uuid);
                         Serial.print(" ");
                         Serial.println(pkt.light_brightness >> 8);
                     }
